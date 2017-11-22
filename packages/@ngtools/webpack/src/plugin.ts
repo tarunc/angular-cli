@@ -278,7 +278,8 @@ export class AotPlugin implements Tapable {
     // still no _entryModule? => try to resolve from mainPath
     if (!this._entryModule && options.mainPath) {
       const mainPath = path.resolve(basePath, options.mainPath);
-      this._entryModule = resolveEntryModuleFromMain(mainPath, this._compilerHost, this._program);
+      this._entryModule = resolveEntryModuleFromMain(mainPath,
+        this._compilerHost, this._program)[0];
     }
 
     if (options.hasOwnProperty('i18nFile')) {

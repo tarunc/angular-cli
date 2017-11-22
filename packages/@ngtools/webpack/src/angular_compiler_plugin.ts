@@ -57,7 +57,7 @@ export interface AngularCompilerPluginOptions {
   sourceMap?: boolean;
   tsConfigPath: string;
   basePath?: string;
-  entryModule?: string;
+  entryModule?: string | string[];
   mainPath?: string;
   skipCodeGeneration?: boolean;
   hostReplacementPaths?: { [path: string]: string };
@@ -95,7 +95,7 @@ export class AngularCompilerPlugin implements Tapable {
   // Contains `moduleImportPath#exportName` => `fullModulePath`.
   private _lazyRoutes: LazyRouteMap = Object.create(null);
   private _tsConfigPath: string;
-  private _entryModule: string;
+  private _entryModule: string[];
   private _mainPath: string | undefined;
   private _basePath: string;
   private _transformers: ts.TransformerFactory<ts.SourceFile>[] = [];
@@ -129,14 +129,17 @@ export class AngularCompilerPlugin implements Tapable {
 
   get options() { return this._options; }
   get done() { return this._donePromise; }
-  get entryModule() {
+  get entryModule(): {path: string, className: string}[] {
     if (!this._entryModule) {
       return undefined;
     }
-    const splitted = this._entryModule.split('#');
-    const path = splitted[0];
-    const className = splitted[1] || 'default';
-    return { path, className };
+
+    return this._entryModule.map((entryModule) => {
+      const splitted = entryModule.split('#');
+      const path = splitted[0];
+      const className = splitted[1] || 'default';
+      return { path, className };
+    });
   }
 
   static isSupported() {
@@ -266,10 +269,16 @@ export class AngularCompilerPlugin implements Tapable {
     // Use entryModule if available in options, otherwise resolve it from mainPath after program
     // creation.
     if (this._options.entryModule) {
-      this._entryModule = this._options.entryModule;
+      this._entryModule = Array.isArray(this._options.entryModule) ?
+        this._options.entryModule : [this._options.entryModule];
     } else if (this._compilerOptions.entryModule) {
-      this._entryModule = path.resolve(this._basePath,
-        this._compilerOptions.entryModule);
+      if (Array.isArray(this._compilerOptions.entryModule)) {
+        this._entryModule = (<string[]>this._compilerOptions.entryModule).map((entryModule) => {
+          return path.resolve(this._basePath, entryModule);
+        });
+      } else {
+        this._entryModule = [path.resolve(this._basePath, this._compilerOptions.entryModule)];
+      }
     }
 
     // Set platform.
@@ -355,14 +364,20 @@ export class AngularCompilerPlugin implements Tapable {
   private _getLazyRoutesFromNgtools() {
     try {
       time('AngularCompilerPlugin._getLazyRoutesFromNgtools');
-      const result = __NGTOOLS_PRIVATE_API_2.listLazyRoutes({
-        program: this._getTsProgram(),
-        host: this._compilerHost,
-        angularCompilerOptions: Object.assign({}, this._compilerOptions, {
-          // genDir seems to still be needed in @angular\compiler-cli\src\compiler_host.js:226.
-          genDir: ''
-        }),
-        entryModule: this._entryModule
+      const result = {};
+      if (!Array.isArray(this._entryModule)) {
+        this._entryModule = [this._entryModule];
+      }
+      this._entryModule.forEach((entryModule) => {
+        Object.assign(result, __NGTOOLS_PRIVATE_API_2.listLazyRoutes({
+          program: this._getTsProgram(),
+          host: this._compilerHost,
+          angularCompilerOptions: Object.assign({}, this._compilerOptions, {
+              // genDir seems to still be needed in @angular\compiler-cli\src\compiler_host.js:226.
+              genDir: ''
+          }),
+          entryModule: entryModule
+        }));
       });
       timeEnd('AngularCompilerPlugin._getLazyRoutesFromNgtools');
       return result;
@@ -636,7 +651,10 @@ export class AngularCompilerPlugin implements Tapable {
     const isAppPath = (fileName: string) =>
       !fileName.endsWith('.ngfactory.ts') && !fileName.endsWith('.ngstyle.ts');
     const isMainPath = (fileName: string) => fileName === this._mainPath;
-    const getEntryModule = () => this.entryModule;
+    const getEntryModule = (i: number) => () => this.entryModule[i];
+    const entryModulesIdxs = Array.from(
+      Array(this.entryModule ? this.entryModule.length : 0).keys()
+    );
     const getLazyRoutes = () => this._lazyRoutes;
     const getTypeChecker = () => this._getTsProgram().getTypeChecker();
 
@@ -653,18 +671,24 @@ export class AngularCompilerPlugin implements Tapable {
       // This transform must go before replaceBootstrap because it looks for the entry module
       // import, which will be replaced.
       if (this._compilerOptions.i18nInLocale) {
-        this._transformers.push(registerLocaleData(isAppPath, getEntryModule,
-          this._compilerOptions.i18nInLocale));
+        entryModulesIdxs.forEach((idx) => {
+          this._transformers.push(registerLocaleData(isAppPath, getEntryModule(idx),
+            this._compilerOptions.i18nInLocale));
+        });
       }
 
       if (!this._JitMode) {
         // Replace bootstrap in browser AOT.
-        this._transformers.push(replaceBootstrap(isAppPath, getEntryModule, getTypeChecker));
+        entryModulesIdxs.forEach((idx) => {
+          this._transformers.push(replaceBootstrap(isAppPath, getEntryModule(idx), getTypeChecker));
+        });
       }
     } else if (this._platform === PLATFORM.Server) {
       this._transformers.push(exportLazyModuleMap(isMainPath, getLazyRoutes));
       if (!this._JitMode) {
-        this._transformers.push(exportNgFactory(isMainPath, getEntryModule));
+        entryModulesIdxs.forEach((idx) => {
+          this._transformers.push(exportNgFactory(isMainPath, getEntryModule(idx)));
+        });
       }
     }
   }

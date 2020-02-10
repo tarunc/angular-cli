@@ -98,7 +98,7 @@ export class AngularCompilerPlugin {
   // Contains `moduleImportPath#exportName` => `fullModulePath`.
   private _lazyRoutes: LazyRouteMap = {};
   private _tsConfigPath: string;
-  private _entryModule: string | null;
+  private _entryModule: string[] | string | null;
   private _mainPath: string | undefined;
   private _basePath: string;
   private _transformers: ts.TransformerFactory<ts.SourceFile>[] = [];
@@ -139,15 +139,16 @@ export class AngularCompilerPlugin {
 
   get options() { return this._options; }
   get done() { return this._donePromise; }
-  get entryModule() {
+  get entryModule(): {path: string, className: string}[] {
     if (!this._entryModule) {
       return null;
     }
-    const splitted = this._entryModule.split(/(#[a-zA-Z_]([\w]+))$/);
-    const path = splitted[0];
-    const className = !!splitted[1] ? splitted[1].substring(1) : 'default';
-
-    return { path, className };
+    return this._entryModule.map((entryModule) => {
+      const splitted = entryModule.split('#');
+      const path = splitted[0];
+      const className = splitted[1] || 'default';
+      return { path, className };
+    });
   }
 
   get typeChecker(): ts.TypeChecker | null {
@@ -301,10 +302,15 @@ export class AngularCompilerPlugin {
     // Use entryModule if available in options, otherwise resolve it from mainPath after program
     // creation.
     if (this._options.entryModule) {
-      this._entryModule = this._options.entryModule;
+      this._entryModule = Array.isArray(this._options.entryModule) ? this._options.entryModule : [this._options.entryModule];
     } else if (this._compilerOptions.entryModule) {
-      this._entryModule = path.resolve(this._basePath,
-        this._compilerOptions.entryModule as string); // temporary cast for type issue
+      if (Array.isArray(this._compilerOptions.entryModule)) {
+        this._entryModule = (<string[]>this._compilerOptions.entryModule).map((entryModule) => {
+          return path.resolve(this._basePath, entryModule);
+        });
+      } else {
+        this._entryModule = [path.resolve(this._basePath, this._compilerOptions.entryModule)];
+      }
     }
 
     // Set platform.
@@ -399,7 +405,7 @@ export class AngularCompilerPlugin {
     if (!this._entryModule && this._mainPath) {
       time('AngularCompilerPlugin._make.resolveEntryModuleFromMain');
       this._entryModule = resolveEntryModuleFromMain(
-        this._mainPath, this._compilerHost, this._getTsProgram() as ts.Program);
+        this._mainPath, this._compilerHost, this._getTsProgram() as ts.Program)[0];
 
       if (this._discoverLazyRoutes && !this.entryModule && !this._compilerOptions.enableIvy) {
         this._warnings.push('Lazy routes discovery is not enabled. '

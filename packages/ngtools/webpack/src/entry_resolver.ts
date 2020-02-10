@@ -137,10 +137,10 @@ function _symbolImportLookup(refactor: TypeScriptFileRefactor,
 
 export function resolveEntryModuleFromMain(mainPath: string,
                                            host: ts.CompilerHost,
-                                           program: ts.Program): string | null {
+                                           program: ts.Program): string[] | null {
   const source = new TypeScriptFileRefactor(mainPath, host, program);
 
-  const bootstrap = source.findAstNodes(source.sourceFile, ts.SyntaxKind.CallExpression, true)
+  const bootstraps = source.findAstNodes(source.sourceFile, ts.SyntaxKind.CallExpression, true)
     .map(node => node as ts.CallExpression)
     .filter(call => {
       const access = call.expression as ts.PropertyAccessExpression;
@@ -153,12 +153,23 @@ export function resolveEntryModuleFromMain(mainPath: string,
     .map(node => node.arguments[0] as ts.Identifier)
     .filter(node => node.kind == ts.SyntaxKind.Identifier);
 
-  if (bootstrap.length === 1) {
-    const bootstrapSymbolName = bootstrap[0].text;
+  if (bootstraps.length < 1) {
+    throw new Error('Tried to find bootstrap code, but could not. Specify either '
+      + 'statically analyzable bootstrap code or pass in an entryModule '
+      + 'to the plugins options.');
+  }
+
+  const entryModules: string[] = [];
+  bootstraps.forEach((bootstrap) => {
+    const bootstrapSymbolName = bootstrap.text;
     const module = _symbolImportLookup(source, bootstrapSymbolName, host, program);
     if (module) {
-      return `${module.replace(/\.ts$/, '')}#${bootstrapSymbolName}`;
+      entryModules.push(`${module.replace(/\.ts$/, '')}#${bootstrapSymbolName}`);
     }
+  });
+
+  if (entryModules.length > 0) {
+    return entryModules;
   }
 
   return null;
